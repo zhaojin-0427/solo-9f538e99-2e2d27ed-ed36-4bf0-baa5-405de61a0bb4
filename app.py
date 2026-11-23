@@ -19,8 +19,13 @@ from flask import (
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 
-from analysis import summarize
-from db import MAX_SUMMARY_RECORDS_PER_BATTERY, Database, ledger_rows
+from analysis import summarize, summarize_ages
+from db import (
+    MAX_SUMMARY_RECORDS_PER_BATTERY,
+    Database,
+    ledger_rows,
+    load_survival,
+)
 from importer import (
     ImportValidationError,
     apply_import,
@@ -140,13 +145,22 @@ def create_app(config: dict | None = None) -> Flask:
 
         rows: list = []
         result = None
+        total_subjects = 0
+        mode = None
         if cutoff is not None:
             conn = database.connect()
             try:
-                rows = _load_summary(conn)
+                # One snapshot answers both "is any follow-up past the cutoff?"
+                # and the metrics, so the mode and the numbers cannot disagree.
+                mode, rows, total_subjects, risk_at_cutoff = load_survival(
+                    conn, cutoff.isoformat()
+                )
             finally:
                 conn.close()
-            result = summarize(rows, cutoff)
+            if mode == "fast":
+                result = summarize_ages(rows, cutoff, risk_at_cutoff=risk_at_cutoff)
+            else:
+                result = summarize(rows, cutoff)
 
         return render_template(
             "survival.html",
@@ -155,7 +169,8 @@ def create_app(config: dict | None = None) -> Flask:
             result=result,
             rows=rows,
             errors=errors,
-            total_subjects=sum(row[4] for row in rows),
+            total_subjects=total_subjects,
+            mode=mode,
         )
 
     @app.get("/ledger")
@@ -200,22 +215,6 @@ def create_app(config: dict | None = None) -> Flask:
         return render_template("error.html", code=404, message="页面不存在。"), 404
 
     return app
-
-
-def _load_summary(conn: sqlite3.Connection):
-    return [
-        (
-            row["activation_date"],
-            int(row["entry_age"]),
-            int(row["end_age"]),
-            int(row["event"]),
-            int(row["subject_count"]),
-        )
-        for row in conn.execute(
-            "SELECT activation_date, entry_age, end_age, event, subject_count "
-            "FROM summary_counts"
-        )
-    ]
 
 
 def _recent_batches(database: Database):

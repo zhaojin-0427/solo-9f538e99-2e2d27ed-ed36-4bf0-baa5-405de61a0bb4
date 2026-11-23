@@ -12,6 +12,7 @@ from typing import Iterable, Sequence
 from db import (
     MAX_SUMMARY_RECORDS_PER_BATTERY,
     apply_summary_changes,
+    ensure_aggregates,
     record_usage,
     summary_from_values,
     usage_for,
@@ -560,6 +561,9 @@ def apply_import(conn, filename: str, records: Sequence[FollowupRecord]) -> Impo
     inserted = updated = deleted = unchanged = summary_records = 0
     batch_id = 0
     try:
+        # Defensive: startup normally backfilled already.  Uses only existing
+        # aggregate tables, never the follow-up history.
+        ensure_aggregates(conn)
         existing, usage = _load_existing(conn, battery_nos)
         plans = _plan_imports(records, existing, usage)
 
